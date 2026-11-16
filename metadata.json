@@ -1,0 +1,6 @@
+{
+  "name": "SiteSync AI",
+  "description": "AI-assisted construction site coordination platform connecting WhatsApp field updates to milestone tracking and daily site reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
