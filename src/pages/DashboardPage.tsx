@@ -18,7 +18,13 @@ import type {
   NormalizedImportResult,
   NormalizedProjectState,
 } from '../types/api';
-import { ApiErrorBanner, EmptyState, LoadingSkeleton, RawResponseDrawer } from '../components/StatusFeedback';
+import { validateProjectId } from '../utils/apiAdapters';
+import {
+  ApiErrorBanner,
+  EmptyState,
+  LoadingSkeleton,
+  RawResponseDrawer,
+} from '../components/StatusFeedback';
 
 interface DashboardPageProps {
   projectId: string;
@@ -56,15 +62,18 @@ export function DashboardPage({
 
   const handleLoadProject = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = draftProjectId.trim();
-    if (!trimmed) {
-      setFormError('Enter a project ID (for example: sw-basic) to load state from the backend.');
+    const err = validateProjectId(draftProjectId);
+    if (err) {
+      setFormError(err);
       return;
     }
+    const trimmed = draftProjectId.trim();
     setFormError(null);
     onProjectIdSubmit(trimmed);
     onLoadProjectState(trimmed);
   };
+
+  const isNotCreatedYet = projectError?.code === 'project_not_found';
 
   return (
     <div className="space-y-6">
@@ -99,7 +108,7 @@ export function DashboardPage({
                   setDraftProjectId(e.target.value);
                   if (formError) setFormError(null);
                 }}
-                placeholder="e.g. sw-basic"
+                placeholder="e.g. demo-site"
                 className="w-full sm:w-52 px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A]"
               />
             </div>
@@ -152,15 +161,25 @@ export function DashboardPage({
                 </div>
                 <div
                   className={`text-sm font-semibold flex items-center gap-1.5 ${
-                    health.online ? 'text-[#16A34A]' : 'text-[#DC2626]'
+                    health.statusLabel === 'degraded'
+                      ? 'text-[#D97706]'
+                      : health.online
+                        ? 'text-[#16A34A]'
+                        : 'text-[#DC2626]'
                   }`}
                 >
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>
-                    {health.online ? 'Online' : 'Offline'}
-                    {health.statusLabel ? ` (${health.statusLabel})` : ''}
+                    {health.statusLabel === 'degraded'
+                      ? 'Degraded'
+                      : health.online
+                        ? `Online (${health.statusLabel})`
+                        : 'Offline'}
                   </span>
                 </div>
+                {health.version && (
+                  <div className="text-xs font-mono text-slate-500">v{health.version}</div>
+                )}
               </div>
 
               <div className="p-3.5 rounded-md border border-slate-200 bg-slate-50/50 space-y-1">
@@ -181,8 +200,11 @@ export function DashboardPage({
                     ? 'Connected'
                     : health.databaseConnected === false
                       ? 'Disconnected'
-                      : health.databaseLabel || 'Not reported'}
+                      : 'Not reported'}
                 </div>
+                {health.databaseError && (
+                  <div className="text-xs text-[#DC2626] break-words">{health.databaseError}</div>
+                )}
               </div>
 
               <div className="p-3.5 rounded-md border border-slate-200 bg-slate-50/50 space-y-1">
@@ -190,6 +212,11 @@ export function DashboardPage({
                 <div className="text-sm font-semibold font-mono text-slate-900 tabular-nums">
                   {health.schemaVersion !== undefined ? String(health.schemaVersion) : 'Not reported'}
                 </div>
+                {health.expectedSchemaVersion !== undefined && (
+                  <div className="text-xs font-mono text-slate-500">
+                    Expected: {health.expectedSchemaVersion}
+                  </div>
+                )}
               </div>
 
               <div className="p-3.5 rounded-md border border-slate-200 bg-slate-50/50 space-y-1">
@@ -199,23 +226,21 @@ export function DashboardPage({
                 </div>
                 <div className="text-sm font-semibold text-slate-900">
                   {health.llmEnabled === true
-                    ? `Enabled${health.llmModel ? ` (${health.llmModel})` : ''}`
+                    ? 'Enabled'
                     : health.llmEnabled === false
-                      ? 'Disabled'
-                      : health.llmModel || 'Not reported'}
+                      ? 'Disabled (Rules mode)'
+                      : 'Not reported'}
                 </div>
+                {health.llmConfigured !== undefined && (
+                  <div className="text-xs text-slate-500">
+                    Configured: {health.llmConfigured ? 'Yes' : 'No'}
+                  </div>
+                )}
               </div>
             </div>
 
-            {health.extraFields.length > 0 && (
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600 pt-1">
-                {health.extraFields.map((field) => (
-                  <div key={field.key} className="flex items-center gap-1.5">
-                    <span className="text-slate-500">{field.key}:</span>
-                    <span className="font-mono text-slate-900">{field.value}</span>
-                  </div>
-                ))}
-              </div>
+            {health.llmNote && (
+              <p className="text-xs text-slate-500">{health.llmNote}</p>
             )}
 
             <RawResponseDrawer data={health.raw} label="Inspect /health JSON" />
@@ -243,7 +268,7 @@ export function DashboardPage({
           )}
         </div>
 
-        {projectError && (
+        {projectError && !isNotCreatedYet && (
           <ApiErrorBanner
             error={projectError}
             title={`Could not load project "${projectId.trim()}"`}
@@ -252,11 +277,32 @@ export function DashboardPage({
 
         {projectLoading && <LoadingSkeleton rows={3} />}
 
+        {!projectLoading && isNotCreatedYet && (
+          <EmptyState
+            icon={FolderSearch}
+            title={`No data yet for "${projectId.trim()}"`}
+            description={
+              projectError.message ||
+              'Projects are created automatically on their first WhatsApp import. Import a chat to start tracking milestones.'
+            }
+            action={
+              <button
+                type="button"
+                onClick={() => onNavigate('import')}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#0F294A] rounded-md hover:bg-[#163864]"
+              >
+                <MessageSquarePlus className="w-4 h-4" />
+                <span>Import Chat for {projectId.trim()}</span>
+              </button>
+            }
+          />
+        )}
+
         {!projectLoading && !projectError && !projectState && (
           <EmptyState
             icon={FolderSearch}
             title="No Project Loaded"
-            description="Enter a known Project ID above and click Load Project State, or import a WhatsApp chat export to begin tracking milestones."
+            description="Enter a known Project ID above and click Load Project State, or import a WhatsApp chat export to automatically create a project."
             action={
               <button
                 type="button"
@@ -279,67 +325,91 @@ export function DashboardPage({
                   {projectState.projectId || projectId}
                 </div>
               </div>
-              {projectState.overallProgressPct !== undefined && (
-                <div className="text-right">
-                  <div className="text-xs text-slate-500">Overall Project Progress</div>
-                  <div className="text-2xl font-bold font-mono text-[#0F294A] tabular-nums">
-                    {projectState.overallProgressPct}%
-                  </div>
+              <div className="text-right">
+                <div className="text-xs text-slate-500">Overall Project Progress</div>
+                <div className="text-2xl font-bold font-mono text-[#0F294A] tabular-nums">
+                  {projectState.overallProgressPct}%
                 </div>
-              )}
+              </div>
             </div>
 
-            {projectState.overallProgressPct !== undefined && (
+            <div className="space-y-1.5">
               <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
                 <div
                   className="bg-[#0F294A] h-full transition-all duration-300"
-                  style={{ width: `${Math.min(100, Math.max(0, projectState.overallProgressPct))}%` }}
+                  style={{
+                    width: `${Math.min(100, Math.max(0, projectState.overallProgressPct))}%`,
+                  }}
                 />
               </div>
-            )}
-
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 pt-2 border-t border-slate-100">
-              {projectState.totalMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">Total Milestones</div>
-                  <div className="text-xl font-bold font-mono text-slate-900 tabular-nums">
-                    {projectState.totalMilestones}
-                  </div>
-                </div>
-              )}
-              {projectState.completedMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">Completed</div>
-                  <div className="text-xl font-bold font-mono text-[#16A34A] tabular-nums">
-                    {projectState.completedMilestones}
-                  </div>
-                </div>
-              )}
-              {projectState.inProgressMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">In Progress</div>
-                  <div className="text-xl font-bold font-mono text-[#0F294A] tabular-nums">
-                    {projectState.inProgressMilestones}
-                  </div>
-                </div>
-              )}
-              {projectState.delayedMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">Delayed</div>
-                  <div className="text-xl font-bold font-mono text-[#DC2626] tabular-nums">
-                    {projectState.delayedMilestones}
-                  </div>
-                </div>
-              )}
-              {projectState.notStartedMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">Not Started</div>
-                  <div className="text-xl font-bold font-mono text-slate-600 tabular-nums">
-                    {projectState.notStartedMilestones}
-                  </div>
-                </div>
+              {projectState.progressNote && (
+                <p className="text-xs text-slate-500">{projectState.progressNote}</p>
               )}
             </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 pt-2 border-t border-slate-100">
+              <div>
+                <div className="text-xs text-slate-500">Total Milestones</div>
+                <div className="text-xl font-bold font-mono text-slate-900 tabular-nums">
+                  {projectState.totalMilestones}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Completed</div>
+                <div className="text-xl font-bold font-mono text-[#16A34A] tabular-nums">
+                  {projectState.completedMilestones}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">In Progress</div>
+                <div className="text-xl font-bold font-mono text-[#0F294A] tabular-nums">
+                  {projectState.inProgressMilestones}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Delayed</div>
+                <div className="text-xl font-bold font-mono text-[#DC2626] tabular-nums">
+                  {projectState.delayedMilestones}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Not Started</div>
+                <div className="text-xl font-bold font-mono text-slate-600 tabular-nums">
+                  {projectState.notStartedMilestones}
+                </div>
+              </div>
+            </div>
+
+            {(projectState.eventsTotal !== undefined ||
+              projectState.eventsPendingReview !== undefined ||
+              projectState.messagesNotUnderstood !== undefined) && (
+              <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600">
+                {projectState.eventsTotal !== undefined && (
+                  <span>
+                    Total events:{' '}
+                    <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                      {projectState.eventsTotal}
+                    </span>
+                  </span>
+                )}
+                {projectState.eventsPendingReview !== undefined && (
+                  <span>
+                    Pending review:{' '}
+                    <span className="font-mono font-semibold text-[#D97706] tabular-nums">
+                      {projectState.eventsPendingReview}
+                    </span>
+                  </span>
+                )}
+                {projectState.messagesNotUnderstood !== undefined && (
+                  <span>
+                    Not understood:{' '}
+                    <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                      {projectState.messagesNotUnderstood}
+                    </span>
+                  </span>
+                )}
+              </div>
+            )}
 
             {projectState.milestones.length > 0 && (
               <div className="pt-3 border-t border-slate-200 space-y-2">
@@ -347,17 +417,15 @@ export function DashboardPage({
                   Milestones ({projectState.milestones.length})
                 </div>
                 <div className="divide-y divide-slate-100">
-                  {projectState.milestones.slice(0, 5).map((m, idx) => (
+                  {projectState.milestones.slice(0, 5).map((m) => (
                     <div
-                      key={m.id ?? idx}
+                      key={m.id}
                       className="py-2 flex items-center justify-between gap-4 text-sm"
                     >
                       <span className="font-medium text-slate-800 truncate">{m.name}</span>
                       <div className="flex items-center gap-3 shrink-0 font-mono text-xs tabular-nums">
                         <span className="text-slate-600">{m.status}</span>
-                        {m.completionPct !== undefined && (
-                          <span className="font-semibold text-slate-900">{m.completionPct}%</span>
-                        )}
+                        <span className="font-semibold text-slate-900">{m.completionPct}%</span>
                       </div>
                     </div>
                   ))}
@@ -377,7 +445,10 @@ export function DashboardPage({
                 Recent WhatsApp Import (Current Session)
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Project: <span className="font-mono text-slate-800">{lastImportResult.projectId || projectId}</span>
+                Project:{' '}
+                <span className="font-mono text-slate-800">
+                  {lastImportResult.projectId || projectId}
+                </span>
               </p>
             </div>
             <div className="flex items-center gap-2">

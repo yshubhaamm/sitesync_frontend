@@ -11,6 +11,7 @@ import type {
   NormalizedHealth,
   NormalizedImportResult,
   NormalizedProjectState,
+  NormalizedRecomputeResult,
 } from './types/api';
 import {
   fetchDailyReport,
@@ -145,6 +146,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Per API_CONTRACT.md section 6: use project_state and latest_report directly
+   * from ImportResponse without making redundant extra requests. Only re-fetch
+   * state with include_history=true if history is currently toggled on.
+   */
   const handleImportSuccess = useCallback(
     (importedProjectId: string, result: NormalizedImportResult) => {
       setLastImportResult(result);
@@ -154,26 +160,39 @@ export default function App() {
         setProjectState(result.projectState);
         setProjectError(null);
       }
-      if (result.latestReport && reportFormat === 'json' && !reportDate) {
-        setDailyReport(result.latestReport);
-        setReportError(null);
+      if (includeHistory) {
+        void loadProjectState(importedProjectId, true);
       }
 
-      // Refresh authoritative state and daily report after successful import
-      void loadProjectState(importedProjectId, includeHistory);
-      void loadDailyReport(importedProjectId, reportDate, reportFormat);
+      if (result.latestReport) {
+        setDailyReport(result.latestReport);
+        setReportError(null);
+        if (result.latestReport.reportDate) {
+          setReportDate(result.latestReport.reportDate);
+        }
+      }
     },
-    [handleProjectIdChange, includeHistory, loadDailyReport, loadProjectState, reportDate, reportFormat]
+    [handleProjectIdChange, includeHistory, loadProjectState]
   );
 
   const handleAfterRecompute = useCallback(
-    async (targetProjectId: string, withHistory: boolean) => {
-      await Promise.all([
-        loadProjectState(targetProjectId, withHistory),
-        loadDailyReport(targetProjectId, reportDate, reportFormat),
-      ]);
+    async (
+      targetProjectId: string,
+      withHistory: boolean,
+      recomputeResult: NormalizedRecomputeResult
+    ) => {
+      if (recomputeResult.projectState && !withHistory) {
+        setProjectState(recomputeResult.projectState);
+        setProjectError(null);
+      } else {
+        await loadProjectState(targetProjectId, withHistory);
+      }
+
+      if (dailyReport) {
+        await loadDailyReport(targetProjectId, reportDate, reportFormat);
+      }
     },
-    [loadDailyReport, loadProjectState, reportDate, reportFormat]
+    [dailyReport, loadDailyReport, loadProjectState, reportDate, reportFormat]
   );
 
   return (

@@ -6,6 +6,7 @@ import {
   importWhatsAppFile,
   SiteSyncApiError,
 } from '../services/sitesyncApi';
+import { validateProjectId } from '../utils/apiAdapters';
 import { ApiErrorBanner } from '../components/StatusFeedback';
 import { ImportResultView } from '../components/ImportResultView';
 
@@ -30,6 +31,7 @@ export function ImportPage({
 }: ImportPageProps) {
   const [activeTab, setActiveTab] = useState<ImportTab>('paste');
   const [localProjectId, setLocalProjectId] = useState(projectId);
+  const [referenceDate, setReferenceDate] = useState('');
   const [chatText, setChatText] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -46,18 +48,17 @@ export function ImportPage({
     e.preventDefault();
     if (submitting) return;
 
-    const trimmedProjectId = localProjectId.trim();
-    const trimmedChat = chatText.trim();
-
-    if (!trimmedProjectId) {
-      setValidationError('Project ID is required.');
+    const projectErr = validateProjectId(localProjectId);
+    if (projectErr) {
+      setValidationError(projectErr);
       return;
     }
-    if (!trimmedChat) {
+    if (!chatText.trim()) {
       setValidationError('Paste WhatsApp chat lines before importing.');
       return;
     }
 
+    const trimmedProjectId = localProjectId.trim();
     setValidationError(null);
     setApiError(null);
     setSubmitting(true);
@@ -67,6 +68,7 @@ export function ImportPage({
       const result = await importWhatsAppChat({
         project_id: trimmedProjectId,
         chat_text: chatText,
+        reference_date: referenceDate || undefined,
       });
       onImportSuccess(trimmedProjectId, result);
     } catch (err) {
@@ -87,23 +89,32 @@ export function ImportPage({
     e.preventDefault();
     if (submitting) return;
 
-    const trimmedProjectId = localProjectId.trim();
-    if (!trimmedProjectId) {
-      setValidationError('Project ID is required.');
+    const projectErr = validateProjectId(localProjectId);
+    if (projectErr) {
+      setValidationError(projectErr);
       return;
     }
     if (!selectedFile) {
       setValidationError('Select a WhatsApp exported .txt file to upload.');
       return;
     }
+    if (!selectedFile.name.toLowerCase().endsWith('.txt')) {
+      setValidationError('Only UTF-8 .txt WhatsApp export files are supported.');
+      return;
+    }
 
+    const trimmedProjectId = localProjectId.trim();
     setValidationError(null);
     setApiError(null);
     setSubmitting(true);
     onProjectIdChange(trimmedProjectId);
 
     try {
-      const result = await importWhatsAppFile(trimmedProjectId, selectedFile);
+      const result = await importWhatsAppFile(
+        trimmedProjectId,
+        selectedFile,
+        referenceDate || undefined
+      );
       onImportSuccess(trimmedProjectId, result);
     } catch (err) {
       if (err instanceof SiteSyncApiError) {
@@ -197,15 +208,26 @@ export function ImportPage({
                       setLocalProjectId(e.target.value);
                       if (validationError) setValidationError(null);
                     }}
-                    placeholder="e.g. sw-basic"
+                    placeholder="e.g. demo-site"
                     disabled={submitting}
                     className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A] disabled:bg-slate-50"
                   />
                 </div>
-                <div className="flex items-end text-xs text-slate-500 pb-2">
-                  <span>
-                    Endpoint: <code className="font-mono text-slate-700">POST /api/v1/whatsapp/import</code>
-                  </span>
+                <div>
+                  <label
+                    htmlFor="paste-reference-date"
+                    className="block text-xs font-medium text-slate-700 mb-1.5"
+                  >
+                    Reference Date (optional, for undated lines)
+                  </label>
+                  <input
+                    id="paste-reference-date"
+                    type="date"
+                    value={referenceDate}
+                    onChange={(e) => setReferenceDate(e.target.value)}
+                    disabled={submitting}
+                    className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A] disabled:bg-slate-50"
+                  />
                 </div>
               </div>
 
@@ -217,19 +239,9 @@ export function ImportPage({
                   >
                     WhatsApp Chat Text
                   </label>
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={() => {
-                      setChatText(
-                        '12/08/24, 9:15 am - Ramesh Kumar: ground floor brickwork shuru ho gaya\n12/08/24, 11:30 am - Suresh Site: waterproofing 50% complete hai\n12/08/24, 2:10 pm - Mahesh Store: cement aaya nahi\n12/08/24, 4:00 pm - Ramesh Kumar: kal plastering start hoga'
-                      );
-                      setValidationError(null);
-                    }}
-                    className="text-xs font-medium text-[#0F294A] hover:underline disabled:opacity-50"
-                  >
-                    Insert sample chat lines
-                  </button>
+                  <span className="text-xs font-mono text-slate-500">
+                    POST /api/v1/whatsapp/import
+                  </span>
                 </div>
                 <textarea
                   id="whatsapp-chat-text"
@@ -253,7 +265,7 @@ export function ImportPage({
 
               <div className="flex items-center justify-between gap-4 pt-1">
                 <span className="text-xs text-slate-500">
-                  Duplicate messages are automatically detected by the backend.
+                  Projects are created automatically on first import. Re-importing skips already-imported lines.
                 </span>
                 <button
                   type="submit"
@@ -283,26 +295,41 @@ export function ImportPage({
                       setLocalProjectId(e.target.value);
                       if (validationError) setValidationError(null);
                     }}
-                    placeholder="e.g. sw-basic"
+                    placeholder="e.g. demo-file"
                     disabled={submitting}
                     className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A] disabled:bg-slate-50"
                   />
                 </div>
-                <div className="flex items-end text-xs text-slate-500 pb-2">
-                  <span>
-                    Endpoint:{' '}
-                    <code className="font-mono text-slate-700">POST /api/v1/whatsapp/import-file</code>
-                  </span>
+                <div>
+                  <label
+                    htmlFor="file-reference-date"
+                    className="block text-xs font-medium text-slate-700 mb-1.5"
+                  >
+                    Reference Date (optional, for undated lines)
+                  </label>
+                  <input
+                    id="file-reference-date"
+                    type="date"
+                    value={referenceDate}
+                    onChange={(e) => setReferenceDate(e.target.value)}
+                    disabled={submitting}
+                    className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A] disabled:bg-slate-50"
+                  />
                 </div>
               </div>
 
               <div>
-                <label
-                  htmlFor="whatsapp-export-file"
-                  className="block text-xs font-medium text-slate-700 mb-1.5"
-                >
-                  WhatsApp Export File (.txt)
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label
+                    htmlFor="whatsapp-export-file"
+                    className="block text-xs font-medium text-slate-700"
+                  >
+                    WhatsApp Export File (.txt, UTF-8)
+                  </label>
+                  <span className="text-xs font-mono text-slate-500">
+                    POST /api/v1/whatsapp/import-file
+                  </span>
+                </div>
                 <div className="border border-dashed border-slate-300 rounded-lg p-6 text-center bg-slate-50/50 space-y-3">
                   <input
                     ref={fileInputRef}
@@ -325,7 +352,7 @@ export function ImportPage({
                     </div>
                   ) : (
                     <p className="text-xs text-slate-500">
-                      Select an exported WhatsApp chat `.txt` file. Uploaded directly as multipart form-data.
+                      Select an exported WhatsApp chat .txt file (UTF-8, up to 5 MB). Uploaded directly as multipart/form-data.
                     </p>
                   )}
                 </div>

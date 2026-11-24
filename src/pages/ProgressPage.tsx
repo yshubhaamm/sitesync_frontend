@@ -13,10 +13,8 @@ import type {
   NormalizedProjectState,
   NormalizedRecomputeResult,
 } from '../types/api';
-import {
-  recomputeMilestones,
-  SiteSyncApiError,
-} from '../services/sitesyncApi';
+import { recomputeMilestones, SiteSyncApiError } from '../services/sitesyncApi';
+import { validateProjectId } from '../utils/apiAdapters';
 import {
   ApiErrorBanner,
   EmptyState,
@@ -33,26 +31,30 @@ interface ProgressPageProps {
   includeHistory: boolean;
   onIncludeHistoryChange: (include: boolean) => void;
   onFetchState: (projectId: string, includeHistory: boolean) => Promise<void>;
-  onAfterRecompute: (projectId: string, includeHistory: boolean) => Promise<void>;
+  onAfterRecompute: (
+    projectId: string,
+    includeHistory: boolean,
+    result: NormalizedRecomputeResult
+  ) => Promise<void>;
 }
 
-function getMilestoneStatusDisplay(status: string, completionPct?: number) {
+function getMilestoneStatusDisplay(status: string, completionPct: number) {
   const s = status.toLowerCase().replace(/[\s-]+/g, '_');
-  if (s === 'completed' || s === 'complete' || s === 'done' || completionPct === 100) {
+  if (s === 'completed' || completionPct === 100) {
     return {
       label: status,
       badgeClass: 'bg-emerald-50 text-[#16A34A] border-emerald-200',
       barClass: 'bg-[#16A34A]',
     };
   }
-  if (s === 'delayed' || s === 'blocked' || s === 'overdue') {
+  if (s === 'delayed') {
     return {
       label: status,
       badgeClass: 'bg-red-50 text-[#DC2626] border-red-200',
       barClass: 'bg-[#DC2626]',
     };
   }
-  if (s === 'in_progress' || s === 'started' || s === 'active') {
+  if (s === 'in_progress') {
     return {
       label: status,
       badgeClass: 'bg-slate-100 text-[#0F294A] border-slate-300',
@@ -89,11 +91,12 @@ export function ProgressPage({
 
   const handleFetch = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = draftProjectId.trim();
-    if (!trimmed) {
-      setValidationError('Enter a Project ID to fetch milestone state.');
+    const err = validateProjectId(draftProjectId);
+    if (err) {
+      setValidationError(err);
       return;
     }
+    const trimmed = draftProjectId.trim();
     setValidationError(null);
     setRecomputeError(null);
     onProjectIdChange(trimmed);
@@ -104,19 +107,20 @@ export function ProgressPage({
     const next = !includeHistory;
     onIncludeHistoryChange(next);
     const trimmed = draftProjectId.trim();
-    if (trimmed) {
+    if (trimmed && !validateProjectId(trimmed)) {
       await onFetchState(trimmed, next);
     }
   };
 
   const handleRecompute = async () => {
-    const trimmed = draftProjectId.trim();
-    if (!trimmed) {
-      setValidationError('Enter a Project ID before recomputing milestones.');
+    const err = validateProjectId(draftProjectId);
+    if (err) {
+      setValidationError(err);
       return;
     }
     if (recomputing) return;
 
+    const trimmed = draftProjectId.trim();
     setValidationError(null);
     setRecomputeError(null);
     setRecomputing(true);
@@ -125,14 +129,14 @@ export function ProgressPage({
     try {
       const res = await recomputeMilestones(trimmed);
       setRecomputeResult(res);
-      await onAfterRecompute(trimmed, includeHistory);
-    } catch (err) {
-      if (err instanceof SiteSyncApiError) {
-        setRecomputeError(err.info);
+      await onAfterRecompute(trimmed, includeHistory, res);
+    } catch (errObj) {
+      if (errObj instanceof SiteSyncApiError) {
+        setRecomputeError(errObj.info);
       } else {
         setRecomputeError({
           kind: 'HTTP_ERROR',
-          message: err instanceof Error ? err.message : 'Failed to recompute milestones.',
+          message: errObj instanceof Error ? errObj.message : 'Failed to recompute milestones.',
         });
       }
     } finally {
@@ -145,7 +149,10 @@ export function ProgressPage({
       {/* Controls Header */}
       <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
-          <form onSubmit={handleFetch} className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5">
+          <form
+            onSubmit={handleFetch}
+            className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5"
+          >
             <div>
               <label
                 htmlFor="progress-project-id"
@@ -161,7 +168,7 @@ export function ProgressPage({
                   setDraftProjectId(e.target.value);
                   if (validationError) setValidationError(null);
                 }}
-                placeholder="e.g. sw-basic"
+                placeholder="e.g. demo-site"
                 className="w-full sm:w-56 px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A]"
               />
             </div>
@@ -224,20 +231,18 @@ export function ProgressPage({
               <span>Milestones Recomputed</span>
             </div>
             <div className="text-xs font-mono text-emerald-900 flex items-center gap-3">
-              {recomputeResult.milestonesUpdated !== undefined && (
-                <span>Updated: {recomputeResult.milestonesUpdated}</span>
-              )}
-              {recomputeResult.overallProgressPct !== undefined && (
-                <span>Overall: {recomputeResult.overallProgressPct}%</span>
+              <span>Changes: {recomputeResult.milestoneChanges.length}</span>
+              {recomputeResult.projectState && (
+                <span>Overall: {recomputeResult.projectState.overallProgressPct}%</span>
               )}
             </div>
           </div>
 
-          {recomputeResult.message && (
-            <p className="text-sm text-emerald-950">{recomputeResult.message}</p>
-          )}
-
-          {recomputeResult.milestoneChanges.length > 0 && (
+          {recomputeResult.milestoneChanges.length === 0 ? (
+            <p className="text-xs text-emerald-900">
+              Milestone states and history were rebuilt from stored events with no changes needed.
+            </p>
+          ) : (
             <div className="bg-white border border-emerald-200 rounded-md divide-y divide-emerald-100">
               {recomputeResult.milestoneChanges.map((c, idx) => (
                 <div
@@ -246,14 +251,13 @@ export function ProgressPage({
                 >
                   <span className="font-medium text-slate-900">{c.milestoneName}</span>
                   <span className="font-mono tabular-nums text-slate-700 inline-flex items-center gap-1.5">
-                    {c.previousPct !== undefined && <span>{c.previousPct}%</span>}
-                    {c.previousPct !== undefined && c.newPct !== undefined && (
-                      <ArrowRight className="w-3 h-3 text-slate-400" />
-                    )}
+                    {c.previousStatus && <span className="text-slate-500">{c.previousStatus}</span>}
+                    {c.previousPct !== undefined && <span>({c.previousPct}%)</span>}
+                    <ArrowRight className="w-3 h-3 text-slate-400" />
+                    {c.newStatus && <span className="font-semibold text-[#0F294A]">{c.newStatus}</span>}
                     {c.newPct !== undefined && (
-                      <span className="font-semibold text-[#16A34A]">{c.newPct}%</span>
+                      <span className="font-semibold text-[#16A34A]">({c.newPct}%)</span>
                     )}
-                    {c.newStatus && <span className="text-slate-500">({c.newStatus})</span>}
                   </span>
                 </div>
               ))}
@@ -285,20 +289,23 @@ export function ProgressPage({
                 <h3 className="text-base font-semibold text-slate-900">
                   Overall Progress{projectState.projectId ? ` · ${projectState.projectId}` : ''}
                 </h3>
-                {projectState.lastUpdated && (
+                {projectState.eventsTotal !== undefined && (
                   <p className="text-xs text-slate-500 mt-0.5 font-mono">
-                    Last updated: {projectState.lastUpdated}
+                    Events: {projectState.eventsTotal} · Pending review:{' '}
+                    {projectState.eventsPendingReview ?? 0} · Not understood:{' '}
+                    {projectState.messagesNotUnderstood ?? 0}
+                    {projectState.generalDelayEvents
+                      ? ` · General delays: ${projectState.generalDelayEvents}`
+                      : ''}
                   </p>
                 )}
               </div>
-              {projectState.overallProgressPct !== undefined && (
-                <div className="text-3xl font-bold font-mono text-[#0F294A] tabular-nums">
-                  {projectState.overallProgressPct}%
-                </div>
-              )}
+              <div className="text-3xl font-bold font-mono text-[#0F294A] tabular-nums">
+                {projectState.overallProgressPct}%
+              </div>
             </div>
 
-            {projectState.overallProgressPct !== undefined && (
+            <div className="space-y-1.5">
               <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-[#0F294A] transition-all duration-300"
@@ -307,49 +314,42 @@ export function ProgressPage({
                   }}
                 />
               </div>
-            )}
+              {projectState.progressNote && (
+                <p className="text-xs text-slate-500">{projectState.progressNote}</p>
+              )}
+            </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 pt-2 border-t border-slate-100">
-              {projectState.totalMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">Total</div>
-                  <div className="text-xl font-bold font-mono tabular-nums text-slate-900">
-                    {projectState.totalMilestones}
-                  </div>
+              <div>
+                <div className="text-xs text-slate-500">Total</div>
+                <div className="text-xl font-bold font-mono tabular-nums text-slate-900">
+                  {projectState.totalMilestones}
                 </div>
-              )}
-              {projectState.completedMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">Completed</div>
-                  <div className="text-xl font-bold font-mono tabular-nums text-[#16A34A]">
-                    {projectState.completedMilestones}
-                  </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Completed</div>
+                <div className="text-xl font-bold font-mono tabular-nums text-[#16A34A]">
+                  {projectState.completedMilestones}
                 </div>
-              )}
-              {projectState.inProgressMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">In Progress</div>
-                  <div className="text-xl font-bold font-mono tabular-nums text-[#0F294A]">
-                    {projectState.inProgressMilestones}
-                  </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">In Progress</div>
+                <div className="text-xl font-bold font-mono tabular-nums text-[#0F294A]">
+                  {projectState.inProgressMilestones}
                 </div>
-              )}
-              {projectState.delayedMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">Delayed</div>
-                  <div className="text-xl font-bold font-mono tabular-nums text-[#DC2626]">
-                    {projectState.delayedMilestones}
-                  </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Delayed</div>
+                <div className="text-xl font-bold font-mono tabular-nums text-[#DC2626]">
+                  {projectState.delayedMilestones}
                 </div>
-              )}
-              {projectState.notStartedMilestones !== undefined && (
-                <div>
-                  <div className="text-xs text-slate-500">Not Started</div>
-                  <div className="text-xl font-bold font-mono tabular-nums text-slate-600">
-                    {projectState.notStartedMilestones}
-                  </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500">Not Started</div>
+                <div className="text-xl font-bold font-mono tabular-nums text-slate-600">
+                  {projectState.notStartedMilestones}
                 </div>
-              )}
+              </div>
             </div>
           </section>
 
@@ -373,20 +373,20 @@ export function ProgressPage({
                       <th className="px-5 py-2.5">Milestone</th>
                       <th className="px-4 py-2.5 whitespace-nowrap">Status</th>
                       <th className="px-4 py-2.5 min-w-[180px]">Completion</th>
-                      <th className="px-5 py-2.5">Notes</th>
+                      <th className="px-5 py-2.5">Notes &amp; Scopes</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {projectState.milestones.map((m, idx) => {
+                    {projectState.milestones.map((m) => {
                       const style = getMilestoneStatusDisplay(m.status, m.completionPct);
-                      const pct = m.completionPct;
                       return (
-                        <tr key={m.id ?? idx} className="hover:bg-slate-50/70 align-top">
+                        <tr key={m.id} className="hover:bg-slate-50/70 align-top">
                           <td className="px-5 py-3 font-medium text-slate-900">
-                            {m.name}
-                            {m.updatedAt && (
-                              <div className="text-xs text-slate-400 font-mono mt-0.5">
-                                {m.updatedAt}
+                            <div>{m.name}</div>
+                            {(m.startedAt || m.completedAt) && (
+                              <div className="text-xs text-slate-400 font-mono mt-0.5 space-x-2">
+                                {m.startedAt && <span>Started: {m.startedAt}</span>}
+                                {m.completedAt && <span>Completed: {m.completedAt}</span>}
                               </div>
                             )}
                           </td>
@@ -398,24 +398,37 @@ export function ProgressPage({
                             </span>
                           </td>
                           <td className="px-4 py-3">
-                            {pct !== undefined ? (
-                              <div className="flex items-center gap-3">
-                                <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                                  <div
-                                    className={`h-full ${style.barClass}`}
-                                    style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-                                  />
-                                </div>
-                                <span className="font-mono text-xs font-semibold tabular-nums text-slate-800 w-10 text-right">
-                                  {pct}%
-                                </span>
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full ${style.barClass}`}
+                                  style={{
+                                    width: `${Math.min(100, Math.max(0, m.completionPct))}%`,
+                                  }}
+                                />
                               </div>
-                            ) : (
-                              <span className="text-xs text-slate-400">—</span>
-                            )}
+                              <span className="font-mono text-xs font-semibold tabular-nums text-slate-800 w-12 text-right">
+                                {m.completionPct}%
+                              </span>
+                            </div>
                           </td>
-                          <td className="px-5 py-3 text-xs text-slate-600 max-w-md">
-                            {m.notes || <span className="text-slate-400">—</span>}
+                          <td className="px-5 py-3 text-xs text-slate-600 max-w-md space-y-1">
+                            {m.scopesCompleted.length > 0 && (
+                              <div className="text-slate-700">
+                                Scopes completed: {m.scopesCompleted.join(', ')}
+                              </div>
+                            )}
+                            {m.notes.length > 0 ? (
+                              <ul className="list-disc pl-4 space-y-0.5">
+                                {m.notes.map((note, idx) => (
+                                  <li key={idx}>{note}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              m.scopesCompleted.length === 0 && (
+                                <span className="text-slate-400">—</span>
+                              )
+                            )}
                           </td>
                         </tr>
                       );
@@ -425,6 +438,20 @@ export function ProgressPage({
               </div>
             )}
           </section>
+
+          {/* Unmapped Activities if present */}
+          {projectState.unmappedActivities.length > 0 && (
+            <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-2">
+              <h3 className="text-sm font-semibold text-slate-900">
+                Unmapped Activities ({projectState.unmappedActivities.length})
+              </h3>
+              <ul className="list-disc pl-5 text-sm text-slate-700 space-y-1">
+                {projectState.unmappedActivities.map((act, idx) => (
+                  <li key={idx}>{act}</li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {/* Historical Milestone Changes */}
           {includeHistory && (
@@ -443,18 +470,14 @@ export function ProgressPage({
                 </div>
               ) : (
                 <div className="divide-y divide-slate-200">
-                  {projectState.history.map((entry, idx) => (
+                  {projectState.history.map((entry) => (
                     <div
-                      key={entry.id ?? idx}
+                      key={entry.id}
                       className="px-5 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm"
                     >
                       <div className="space-y-0.5">
                         <div className="font-medium text-slate-900">{entry.milestoneName}</div>
-                        {(entry.reason || entry.notes || entry.sourceMessage) && (
-                          <div className="text-xs text-slate-600">
-                            {entry.reason || entry.notes || entry.sourceMessage}
-                          </div>
-                        )}
+                        {entry.note && <div className="text-xs text-slate-600">{entry.note}</div>}
                         {entry.changedAt && (
                           <div className="text-xs font-mono text-slate-400">{entry.changedAt}</div>
                         )}

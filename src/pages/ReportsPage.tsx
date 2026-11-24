@@ -1,16 +1,11 @@
 import React, { useState } from 'react';
-import {
-  AlertTriangle,
-  Calendar,
-  FileText,
-  Loader2,
-  ShieldAlert,
-} from 'lucide-react';
+import { Calendar, FileText, Loader2, ShieldAlert, Users } from 'lucide-react';
 import type {
   ApiErrorInfo,
   NormalizedDailyReport,
   ReportEntryItem,
 } from '../types/api';
+import { validateProjectId } from '../utils/apiAdapters';
 import {
   ApiErrorBanner,
   EmptyState,
@@ -71,21 +66,54 @@ function ReportSectionCard({
       ) : (
         <ul className="divide-y divide-slate-100">
           {items.map((item, idx) => (
-            <li key={idx} className="py-2 first:pt-0 last:pb-0 text-sm space-y-1">
+            <li key={item.id ?? idx} className="py-2.5 first:pt-0 last:pb-0 text-sm space-y-1">
               <div className="flex items-start justify-between gap-3">
-                <span className="text-slate-800">{item.text}</span>
+                <span className="text-slate-800 font-medium">{item.text}</span>
                 {item.progressPct !== undefined && (
                   <span className="font-mono text-xs font-semibold text-[#0F294A] tabular-nums shrink-0">
                     {item.progressPct}%
                   </span>
                 )}
               </div>
-              {(item.meta || item.reason || item.status) && (
-                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-2">
-                  {item.status && <span className="font-mono text-slate-600">{item.status}</span>}
-                  {item.meta && <span>{item.meta}</span>}
-                  {item.reason && <span className="text-[#D97706]">{item.reason}</span>}
+
+              {item.evidence && (
+                <div className="text-xs font-mono text-slate-500 break-words">
+                  &ldquo;{item.evidence}&rdquo;
                 </div>
+              )}
+
+              {(item.meta || item.milestoneEffect || item.status || item.confidence !== null) && (
+                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  {item.meta && <span>{item.meta}</span>}
+                  {item.status && (
+                    <>
+                      {item.meta && <span aria-hidden="true">·</span>}
+                      <span>{item.status}</span>
+                    </>
+                  )}
+                  {item.milestoneEffect && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono text-[#0F294A]">{item.milestoneEffect}</span>
+                    </>
+                  )}
+                  {item.confidence !== undefined && item.confidence !== null && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono tabular-nums">
+                        {Math.round(item.confidence <= 1 ? item.confidence * 100 : item.confidence)}% conf.
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {item.notes && item.notes.length > 0 && (
+                <ul className="list-disc pl-4 text-xs text-slate-600 space-y-0.5">
+                  {item.notes.map((n, nIdx) => (
+                    <li key={nIdx}>{n}</li>
+                  ))}
+                </ul>
               )}
             </li>
           ))}
@@ -116,11 +144,12 @@ export function ReportsPage({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = draftProjectId.trim();
-    if (!trimmed) {
-      setValidationError('Project ID is required to fetch a daily site report.');
+    const err = validateProjectId(draftProjectId);
+    if (err) {
+      setValidationError(err);
       return;
     }
+    const trimmed = draftProjectId.trim();
     setValidationError(null);
     onProjectIdChange(trimmed);
     await onFetchReport(trimmed, reportDate, viewFormat);
@@ -129,7 +158,7 @@ export function ReportsPage({
   const handleSwitchFormat = async (nextFormat: 'json' | 'markdown') => {
     onViewFormatChange(nextFormat);
     const trimmed = draftProjectId.trim();
-    if (trimmed) {
+    if (trimmed && !validateProjectId(trimmed)) {
       await onFetchReport(trimmed, reportDate, nextFormat);
     }
   };
@@ -158,7 +187,7 @@ export function ReportsPage({
                   setDraftProjectId(e.target.value);
                   if (validationError) setValidationError(null);
                 }}
-                placeholder="e.g. sw-basic"
+                placeholder="e.g. demo-site"
                 className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A]"
               />
             </div>
@@ -170,15 +199,13 @@ export function ReportsPage({
               >
                 Report Date (optional)
               </label>
-              <div className="relative">
-                <input
-                  id="report-date"
-                  type="date"
-                  value={reportDate}
-                  onChange={(e) => onReportDateChange(e.target.value)}
-                  className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A]"
-                />
-              </div>
+              <input
+                id="report-date"
+                type="date"
+                value={reportDate}
+                onChange={(e) => onReportDateChange(e.target.value)}
+                className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0F294A] focus:border-[#0F294A]"
+              />
             </div>
 
             <button
@@ -238,7 +265,7 @@ export function ReportsPage({
         <EmptyState
           icon={FileText}
           title="No Daily Report Loaded"
-          description="Enter a Project ID, optionally select a date, and click Fetch Report to view the backend-generated daily site report."
+          description="Enter a Project ID, optionally select a date (defaults to the latest day with events), and click Fetch Report."
         />
       )}
 
@@ -246,33 +273,77 @@ export function ReportsPage({
         <div className="space-y-6">
           {/* Report Header Bar */}
           {(report.reportDate || report.overallProgressPct !== undefined || report.projectId) && (
-            <section className="bg-white border border-slate-200 rounded-lg p-5 flex flex-wrap items-center justify-between gap-4">
-              <div className="space-y-1">
-                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-2">
-                  <span>Daily Site Report</span>
-                  {(report.projectId || projectId) && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span className="font-mono text-slate-800">
-                        {report.projectId || projectId}
-                      </span>
-                    </>
+            <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-500 flex flex-wrap items-center gap-2">
+                    <span>Daily Site Report</span>
+                    {(report.projectId || projectId) && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono text-slate-800">
+                          {report.projectId || projectId}
+                        </span>
+                      </>
+                    )}
+                    {report.extractionMethod && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono">{report.extractionMethod}</span>
+                      </>
+                    )}
+                  </div>
+                  {report.reportDate && (
+                    <div className="flex items-center gap-2 text-lg font-bold font-mono text-slate-900">
+                      <Calendar className="w-4 h-4 text-slate-500" />
+                      <span>{report.reportDate}</span>
+                    </div>
                   )}
                 </div>
-                {report.reportDate && (
-                  <div className="flex items-center gap-2 text-lg font-bold font-mono text-slate-900">
-                    <Calendar className="w-4 h-4 text-slate-500" />
-                    <span>{report.reportDate}</span>
+
+                {report.overallProgressPct !== undefined && (
+                  <div className="text-right">
+                    <div className="text-xs text-slate-500">Overall Project Progress</div>
+                    <div className="text-2xl font-bold font-mono text-[#0F294A] tabular-nums">
+                      {report.overallProgressPct}%
+                    </div>
                   </div>
                 )}
               </div>
 
-              {report.overallProgressPct !== undefined && (
-                <div className="text-right">
-                  <div className="text-xs text-slate-500">Overall Project Progress</div>
-                  <div className="text-2xl font-bold font-mono text-[#0F294A] tabular-nums">
-                    {report.overallProgressPct}%
-                  </div>
+              {report.counts && (
+                <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600">
+                  <span>
+                    Messages:{' '}
+                    <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                      {report.counts.messages}
+                    </span>
+                  </span>
+                  <span>
+                    Accepted events:{' '}
+                    <span className="font-mono font-semibold text-[#16A34A] tabular-nums">
+                      {report.counts.acceptedEvents}
+                    </span>
+                  </span>
+                  <span>
+                    Needs review:{' '}
+                    <span className="font-mono font-semibold text-[#D97706] tabular-nums">
+                      {report.counts.needsReview}
+                    </span>
+                  </span>
+                  {report.duplicatesIgnored !== undefined && (
+                    <span>
+                      Duplicates ignored:{' '}
+                      <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                        {report.duplicatesIgnored}
+                      </span>
+                    </span>
+                  )}
+                  {report.generatedAt && (
+                    <span className="text-slate-400 font-mono">
+                      Generated: {report.generatedAt}
+                    </span>
+                  )}
                 </div>
               )}
             </section>
@@ -284,20 +355,22 @@ export function ReportsPage({
                 <MarkdownReportView markdown={report.markdown} />
               ) : (
                 <p className="text-sm text-slate-500">
-                  The backend did not return a markdown body for this request. Switch to Structured JSON or inspect the raw response below.
+                  The backend did not return a markdown body for this request. Switch to Structured
+                  JSON or inspect the raw response below.
                 </p>
               )}
             </section>
           ) : (
             <div className="space-y-6">
-              {report.summary && (
-                <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-1.5">
-                  <h3 className="text-sm font-semibold text-slate-900">Summary</h3>
-                  <p className="text-sm text-slate-700 leading-relaxed">{report.summary}</p>
-                </section>
-              )}
+              {report.counts &&
+                report.counts.acceptedEvents === 0 &&
+                report.counts.needsReview === 0 && (
+                  <div className="bg-slate-100/80 border border-slate-200 rounded-lg p-4 text-sm text-slate-600">
+                    No chat updates were recorded for {report.reportDate || 'this date'}.
+                  </div>
+                )}
 
-              {/* Supervisor Review Banner if present */}
+              {/* Supervisor Review Banner if items exist */}
               {report.needsSupervisorReview && report.needsSupervisorReview.length > 0 && (
                 <section className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-2.5">
                   <div className="flex items-center gap-2 text-sm font-semibold text-[#D97706]">
@@ -308,14 +381,26 @@ export function ReportsPage({
                   </div>
                   <ul className="divide-y divide-amber-200/70">
                     {report.needsSupervisorReview.map((item, idx) => (
-                      <li key={idx} className="py-2 first:pt-0 last:pb-0 text-sm text-amber-950">
-                        <div>{item.text}</div>
-                        {(item.reason || item.meta) && (
-                          <div className="text-xs text-amber-800 mt-0.5 flex flex-wrap gap-2">
-                            {item.reason && <span>Reason: {item.reason}</span>}
-                            {item.meta && <span>{item.meta}</span>}
-                          </div>
+                      <li key={idx} className="py-2.5 first:pt-0 last:pb-0 text-sm text-amber-950 space-y-1">
+                        <div className="font-medium font-mono text-xs">&ldquo;{item.text}&rdquo;</div>
+                        {item.reason && (
+                          <div className="text-xs text-amber-900">{item.reason}</div>
                         )}
+                        <div className="text-xs text-amber-800 flex flex-wrap items-center gap-2">
+                          {item.kind && <span className="font-mono">{item.kind}</span>}
+                          {item.meta && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span>{item.meta}</span>
+                            </>
+                          )}
+                          {item.flags && item.flags.length > 0 && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono">{item.flags.join(', ')}</span>
+                            </>
+                          )}
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -372,11 +457,59 @@ export function ReportsPage({
 
               {/* Labour & Site Issues */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <ReportSectionCard
-                  title="Labour Updates"
-                  items={report.labourUpdates}
-                  tone="default"
-                />
+                {report.labour !== undefined && (
+                  <section className="bg-white border border-slate-200 rounded-lg p-4 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                      <h4 className="text-sm font-semibold text-slate-900 inline-flex items-center gap-1.5">
+                        <Users className="w-4 h-4 text-slate-500" />
+                        <span>Labour Updates</span>
+                      </h4>
+                      <span className="text-xs font-mono tabular-nums text-slate-500">
+                        {report.labour.reports} report{report.labour.reports === 1 ? '' : 's'}
+                      </span>
+                    </div>
+
+                    {(report.labour.maxWorkers !== null || report.labour.latestWorkers !== null) && (
+                      <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600 pb-1">
+                        {report.labour.latestWorkers !== null && (
+                          <span>
+                            Latest workers:{' '}
+                            <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                              {report.labour.latestWorkers}
+                            </span>
+                          </span>
+                        )}
+                        {report.labour.maxWorkers !== null && (
+                          <span>
+                            Max workers:{' '}
+                            <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                              {report.labour.maxWorkers}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {report.labour.items.length === 0 ? (
+                      <p className="text-xs text-slate-500">None reported.</p>
+                    ) : (
+                      <ul className="divide-y divide-slate-100">
+                        {report.labour.items.map((item, idx) => (
+                          <li key={item.id ?? idx} className="py-2 first:pt-0 last:pb-0 text-sm space-y-1">
+                            <div className="text-slate-800 font-medium">{item.text}</div>
+                            {item.evidence && (
+                              <div className="text-xs font-mono text-slate-500">
+                                &ldquo;{item.evidence}&rdquo;
+                              </div>
+                            )}
+                            {item.meta && <div className="text-xs text-slate-500">{item.meta}</div>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                )}
+
                 <ReportSectionCard
                   title="Important Site Issues"
                   items={report.importantSiteIssues}
@@ -390,28 +523,6 @@ export function ReportsPage({
                   items={report.needsSupervisorReview}
                   emptyText="No messages awaiting supervisor review."
                 />
-              )}
-
-              {/* Extra backend-returned sections not in the standard list */}
-              {report.extraSections.length > 0 && (
-                <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                    <AlertTriangle className="w-4 h-4 text-slate-500" />
-                    <span>Additional Report Fields</span>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                    {report.extraSections.map((sec) => (
-                      <div key={sec.key} className="p-3 bg-slate-50 border border-slate-200 rounded">
-                        <div className="font-semibold text-slate-700 mb-1">{sec.label}</div>
-                        <pre className="font-mono text-slate-800 whitespace-pre-wrap break-words">
-                          {typeof sec.value === 'string'
-                            ? sec.value
-                            : JSON.stringify(sec.value, null, 2)}
-                        </pre>
-                      </div>
-                    ))}
-                  </div>
-                </section>
               )}
             </div>
           )}

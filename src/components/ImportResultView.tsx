@@ -19,7 +19,12 @@ interface ImportResultViewProps {
 
 const CATEGORY_STYLES: Record<
   EventCategory,
-  { label: string; textClass: string; bgClass: string; icon: React.ComponentType<{ className?: string }> }
+  {
+    label: string;
+    textClass: string;
+    bgClass: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }
 > = {
   accepted: {
     label: 'Accepted',
@@ -61,7 +66,7 @@ export function ImportResultView({
   const [categoryFilter, setCategoryFilter] = useState<EventCategory | 'all'>('all');
 
   const summaryItems: Array<{ label: string; value: number | string | undefined; tone?: string }> = [
-    { label: 'Total messages parsed', value: result.messagesParsed },
+    { label: 'Messages parsed', value: result.messagesParsed },
     { label: 'Accepted events', value: result.acceptedEventsCount, tone: 'text-[#16A34A]' },
     { label: 'Needs review', value: result.needsReviewCount, tone: 'text-[#D97706]' },
     { label: 'Not understood', value: result.notUnderstoodCount, tone: 'text-slate-700' },
@@ -70,11 +75,14 @@ export function ImportResultView({
   ].filter((item) => item.value !== undefined);
 
   const secondaryMetrics: Array<{ label: string; value: number | string | undefined }> = [
-    { label: 'Processed messages', value: result.processedMessages },
+    { label: 'Processed', value: result.processedMessages },
     { label: 'Already imported', value: result.alreadyImportedMessages },
     { label: 'System messages', value: result.systemMessages },
     { label: 'Media / deleted', value: result.mediaDeletedMessages },
-    { label: 'LLM extraction mode', value: result.llmExtractionMode },
+    { label: 'No timestamp', value: result.noTimestampMessages },
+    { label: 'Events created', value: result.eventsCreated },
+    { label: 'Extraction mode', value: result.llmExtractionMode },
+    { label: 'Date order', value: result.dateOrder?.toUpperCase() },
   ].filter((item) => item.value !== undefined);
 
   const filteredEvents =
@@ -102,8 +110,9 @@ export function ImportResultView({
           </div>
           {result.dateOrderAmbiguous && (
             <p className="text-xs text-amber-900">
-              Backend flagged <span className="font-mono font-medium">date_order_ambiguous = true</span>.
-              Verify extracted event dates carefully before finalizing site reports.
+              Backend flagged <span className="font-mono font-medium">date_order_ambiguous = true</span>
+              {result.dateOrder ? ` (assumed ${result.dateOrder.toUpperCase()})` : ''}. Verify extracted
+              dates before finalizing site reports.
             </p>
           )}
           {result.warnings.length > 0 && (
@@ -127,11 +136,28 @@ export function ImportResultView({
                   Project: <span className="font-mono text-slate-800">{result.projectId}</span>
                 </span>
               )}
+              {result.batchId !== undefined && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Batch <span className="font-mono text-slate-800">#{result.batchId}</span>
+                  </span>
+                </>
+              )}
+              {result.source && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Source: <span className="font-mono text-slate-800">{result.source}</span>
+                    {result.filename ? ` (${result.filename})` : ''}
+                  </span>
+                </>
+              )}
               {result.affectedDates.length > 0 && (
                 <>
                   <span aria-hidden="true">·</span>
                   <span>
-                    Affected dates:{' '}
+                    Dates affected:{' '}
                     <span className="font-mono text-slate-800">
                       {result.affectedDates.join(', ')}
                     </span>
@@ -168,7 +194,9 @@ export function ImportResultView({
             {summaryItems.map((item) => (
               <div key={item.label} className="space-y-1">
                 <div className="text-xs text-slate-500">{item.label}</div>
-                <div className={`text-2xl font-bold font-mono tabular-nums ${item.tone ?? 'text-slate-900'}`}>
+                <div
+                  className={`text-2xl font-bold font-mono tabular-nums ${item.tone ?? 'text-slate-900'}`}
+                >
                   {item.value}
                 </div>
               </div>
@@ -192,13 +220,21 @@ export function ImportResultView({
         )}
       </section>
 
-      {/* Extracted Events Table */}
+      {/* Extracted Events & Review Items from Latest Report */}
       {result.events.length > 0 && (
         <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
           <div className="px-5 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-slate-900">
-              Extracted Events &amp; Message Classifications ({filteredEvents.length})
-            </h3>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">
+                Extracted Events &amp; Review Items ({filteredEvents.length})
+              </h3>
+              {result.latestReport?.reportDate && (
+                <p className="text-xs text-slate-500 mt-0.5">
+                  From latest touched day:{' '}
+                  <span className="font-mono text-slate-700">{result.latestReport.reportDate}</span>
+                </p>
+              )}
+            </div>
 
             {presentCategories.length > 1 && (
               <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-md">
@@ -238,7 +274,7 @@ export function ImportResultView({
                   <th className="px-4 py-2.5 whitespace-nowrap">Classification</th>
                   <th className="px-4 py-2.5">Message / Extracted Event</th>
                   <th className="px-4 py-2.5 whitespace-nowrap">Milestone / Type</th>
-                  <th className="px-4 py-2.5 text-right whitespace-nowrap">Progress / Conf.</th>
+                  <th className="px-4 py-2.5 text-right whitespace-nowrap">Confidence</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -266,31 +302,45 @@ export function ImportResultView({
                         )}
                         <div className="text-xs text-slate-500 flex flex-wrap items-center gap-2">
                           {ev.sender && <span>{ev.sender}</span>}
-                          {(ev.timestamp || ev.date) && (
+                          {ev.timestamp && (
                             <>
                               {ev.sender && <span aria-hidden="true">·</span>}
-                              <span className="font-mono">{ev.timestamp || ev.date}</span>
+                              <span className="font-mono">{ev.timestamp}</span>
                             </>
                           )}
-                          {ev.reason && (
+                          {ev.extractionMethod && (
                             <>
-                              {(ev.sender || ev.timestamp || ev.date) && <span aria-hidden="true">·</span>}
-                              <span className="text-[#D97706]">{ev.reason}</span>
+                              {(ev.sender || ev.timestamp) && <span aria-hidden="true">·</span>}
+                              <span className="font-mono">{ev.extractionMethod}</span>
+                            </>
+                          )}
+                          {ev.flags && ev.flags.length > 0 && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono text-slate-600">
+                                {ev.flags.join(', ')}
+                              </span>
                             </>
                           )}
                         </div>
+                        {ev.reason && (
+                          <div className="text-xs text-[#D97706]">{ev.reason}</div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-700 whitespace-nowrap">
-                        <div>{ev.milestoneName || ev.eventType || '—'}</div>
-                        {ev.status && (
-                          <div className="text-slate-500 font-mono mt-0.5">{ev.status}</div>
+                        <div className="font-medium">{ev.milestoneName || ev.eventType || '—'}</div>
+                        {ev.milestoneEffect && (
+                          <div className="text-slate-500 font-mono mt-0.5">{ev.milestoneEffect}</div>
+                        )}
+                        {!ev.milestoneEffect && ev.milestoneName && ev.eventType && (
+                          <div className="text-slate-500 mt-0.5">{ev.eventType}</div>
                         )}
                       </td>
                       <td className="px-4 py-3 text-right font-mono tabular-nums text-xs text-slate-700 whitespace-nowrap">
-                        {ev.progressPct !== undefined ? (
-                          <span className="font-semibold text-slate-900">{ev.progressPct}%</span>
-                        ) : ev.confidence !== undefined ? (
-                          <span>{Math.round(ev.confidence <= 1 ? ev.confidence * 100 : ev.confidence)}% conf.</span>
+                        {ev.confidence !== undefined ? (
+                          <span>
+                            {Math.round(ev.confidence <= 1 ? ev.confidence * 100 : ev.confidence)}%
+                          </span>
                         ) : (
                           <span className="text-slate-400">—</span>
                         )}
@@ -318,12 +368,7 @@ export function ImportResultView({
                 key={change.milestoneId ?? idx}
                 className="px-5 py-3 flex flex-wrap items-center justify-between gap-3 text-sm"
               >
-                <div className="space-y-0.5">
-                  <div className="font-medium text-slate-900">{change.milestoneName}</div>
-                  {(change.notes || change.reason) && (
-                    <div className="text-xs text-slate-500">{change.notes || change.reason}</div>
-                  )}
-                </div>
+                <div className="font-medium text-slate-900">{change.milestoneName}</div>
                 <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
                   {change.previousStatus && (
                     <span className="text-slate-500">{change.previousStatus}</span>
@@ -347,55 +392,31 @@ export function ImportResultView({
         </section>
       )}
 
-      {/* Embedded Project State & Latest Report if returned by import endpoint */}
+      {/* Embedded Project State returned by import endpoint */}
       {result.projectState && (
-        <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+        <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-2">
           <h3 className="text-sm font-semibold text-slate-900">
             Updated Project State (Returned in Import Response)
           </h3>
-          <div className="flex flex-wrap items-center gap-6 text-sm">
-            {result.projectState.overallProgressPct !== undefined && (
-              <div>
-                <span className="text-slate-500">Overall Progress: </span>
-                <span className="font-mono font-bold text-[#0F294A] tabular-nums">
-                  {result.projectState.overallProgressPct}%
-                </span>
-              </div>
-            )}
-            {result.projectState.totalMilestones !== undefined && (
-              <div>
-                <span className="text-slate-500">Total Milestones: </span>
-                <span className="font-mono font-semibold tabular-nums">
-                  {result.projectState.totalMilestones}
-                </span>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {result.latestReport && (
-        <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-2">
-          <h3 className="text-sm font-semibold text-slate-900">
-            Latest Report Snapshot (Returned in Import Response)
-          </h3>
-          <div className="text-xs text-slate-500 flex flex-wrap gap-3">
-            {result.latestReport.reportDate && (
-              <span>
-                Date: <span className="font-mono text-slate-800">{result.latestReport.reportDate}</span>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <div>
+              <span className="text-slate-500">Overall Progress: </span>
+              <span className="font-mono font-bold text-[#0F294A] tabular-nums">
+                {result.projectState.overallProgressPct}%
               </span>
-            )}
-            {result.latestReport.overallProgressPct !== undefined && (
-              <span>
-                Progress:{' '}
-                <span className="font-mono text-slate-800">
-                  {result.latestReport.overallProgressPct}%
-                </span>
+            </div>
+            <div>
+              <span className="text-slate-500">Milestones: </span>
+              <span className="font-mono font-semibold tabular-nums">
+                {result.projectState.completedMilestones} completed ·{' '}
+                {result.projectState.inProgressMilestones} in progress ·{' '}
+                {result.projectState.delayedMilestones} delayed ·{' '}
+                {result.projectState.notStartedMilestones} not started
               </span>
-            )}
+            </div>
           </div>
-          {result.latestReport.summary && (
-            <p className="text-sm text-slate-700">{result.latestReport.summary}</p>
+          {result.projectState.progressNote && (
+            <p className="text-xs text-slate-500">{result.projectState.progressNote}</p>
           )}
         </section>
       )}

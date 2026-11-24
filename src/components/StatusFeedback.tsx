@@ -14,14 +14,20 @@ export function ApiErrorBanner({ error, title }: ApiErrorBannerProps) {
   const heading =
     title ||
     (error.kind === 'NOT_FOUND'
-      ? 'Resource Not Found (404)'
-      : error.kind === 'VALIDATION_ERROR'
-        ? 'Validation Error (422)'
-        : error.kind === 'SERVER_ERROR'
-          ? `Backend Server Error (${error.status ?? 500})`
-          : error.kind === 'NETWORK_OR_CORS'
-            ? 'Backend Unreachable or Blocked by CORS'
-            : `Request Failed (${error.status ?? 'Error'})`);
+      ? error.code === 'project_not_found'
+        ? 'Project Not Found (404)'
+        : error.code === 'no_events'
+          ? 'No Dated Events Found (404)'
+          : 'Resource Not Found (404)'
+      : error.kind === 'PAYLOAD_TOO_LARGE'
+        ? 'Input Too Large (413)'
+        : error.kind === 'VALIDATION_ERROR'
+          ? 'Validation Error (422)'
+          : error.kind === 'SERVER_ERROR'
+            ? `Backend Server Error (${error.status ?? 500})`
+            : error.kind === 'NETWORK_OR_CORS'
+              ? 'Backend Unreachable or Blocked by CORS'
+              : `Request Failed (${error.status ?? 'Error'})`);
 
   return (
     <div
@@ -35,7 +41,12 @@ export function ApiErrorBanner({ error, title }: ApiErrorBannerProps) {
           <AlertCircle className="w-4 h-4 text-[#DC2626] mt-0.5 shrink-0" />
         )}
         <div className="min-w-0 flex-1 space-y-1">
-          <div className="font-semibold text-[#DC2626]">{heading}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-[#DC2626]">{heading}</span>
+            {error.code && (
+              <span className="text-xs font-mono text-red-700">({error.code})</span>
+            )}
+          </div>
           <p className="text-red-800 break-words">{error.message}</p>
           {error.details && error.details.length > 0 && (
             <ul className="list-disc pl-5 text-xs text-red-800 space-y-0.5 pt-1 font-mono">
@@ -60,33 +71,25 @@ export function ApiErrorBanner({ error, title }: ApiErrorBannerProps) {
             ) : (
               <ChevronRight className="w-3.5 h-3.5 shrink-0" />
             )}
-            <span>FastAPI CORS setup guide</span>
+            <span>Local FastAPI startup &amp; CORS setup</span>
           </button>
 
           {showCorsGuide && (
             <div className="space-y-2 text-xs text-slate-700">
               <p>
-                Ensure FastAPI is running at{' '}
+                Start the backend from your SiteSync backend project folder at{' '}
                 <code className="font-mono bg-white px-1 py-0.5 rounded border border-red-200">
                   {API_BASE_URL}
                 </code>{' '}
-                with <code className="font-mono bg-white px-1 py-0.5 rounded border border-red-200">CORSMiddleware</code>:
+                and include this frontend origin in{' '}
+                <code className="font-mono bg-white px-1 py-0.5 rounded border border-red-200">
+                  SITESYNC_CORS_ALLOW_ORIGINS
+                </code>
+                :
               </p>
               <pre className="bg-slate-900 text-slate-100 p-3 rounded font-mono text-[11px] overflow-x-auto leading-relaxed">
-{`from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)`}
+{`$env:SITESYNC_CORS_ALLOW_ORIGINS="http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+python -m uvicorn app.main:app --reload --reload-dir app --port 8000`}
               </pre>
             </div>
           )}
